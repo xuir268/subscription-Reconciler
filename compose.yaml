@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reconciler
+      POSTGRES_PASSWORD: reconciler
+      POSTGRES_DB: reconciler
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reconciler -d reconciler"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  service:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://reconciler:reconciler@postgres:5432/reconciler?sslmode=disable
+      ADDR: :8080
+      BASE_URL: http://service:8080
+      CARRIER_WORKER_POOL_SIZE: 8
+      API_RATE_LIMIT_PER_MINUTE: 120
+    ports:
+      - "8080:8080"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    depends_on:
+      - service
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: light
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+  backup:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: reconciler
+      PGPASSWORD: reconciler
+      PGDATABASE: reconciler
+      SNAPSHOT_DIR: /snapshots
+      RETAIN_COUNT: 24
+    volumes:
+      - snapshots:/snapshots
+      - ./scripts/backup.sh:/backup.sh:ro
+      - ./scripts/restore.sh:/restore.sh:ro
+    entrypoint: ["/bin/sh", "-c"]
+    # hourly snapshots; retain last 24 (= 24h of coverage)
+    command:
+      - |
+        echo "0 * * * * /backup.sh >> /snapshots/backup.log 2>&1" | crontab -
+        crond -f -l 6
+
+volumes:
+  postgres-data:
+  snapshots:

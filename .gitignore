@@ -1,0 +1,29 @@
+# binaries
+subscription-reconciler
+/bin/
+
+# test cache and coverage
+*.test
+*.out
+coverage.html
+
+# environment
+.env
+.env.*
+!.env.example
+
+# snapshots (DR dumps — back up to object storage, not git)
+scripts/snapshots/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Docker volumes (if bind-mounted locally)
+postgres-data/
+snapshots/
