@@ -1,0 +1,21 @@
+apiVersion: 1
+
+datasources:
+  - name: Postgres
+    uid: postgres-reconciler
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: reconciler
+    database: reconciler
+    secureJsonData:
+      password: reconciler
+    jsonData:
+      sslmode: disable
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+      timescaledb: false
+    isDefault: false
+    editable: true

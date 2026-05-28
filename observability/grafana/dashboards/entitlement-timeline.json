@@ -1,0 +1,158 @@
+{
+  "uid": "entitlement-timeline",
+  "title": "Entitlement Timeline & Audit Log",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Transitions",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT COUNT(*) AS value FROM entitlement_audit_log",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Transitions (last 1h)",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT COUNT(*) AS value FROM entitlement_audit_log WHERE created_at >= now() - interval '1 hour'",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Active Users (STORE)",
+      "gridPos": {"x": 12, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT COUNT(DISTINCT user_id) AS value FROM source_entitlements WHERE active = true AND source = 'STORE'",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Active Users (All Sources)",
+      "gridPos": {"x": 18, "y": 0, "w": 6, "h": 4},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT COUNT(DISTINCT user_id) AS value FROM source_entitlements WHERE active = true",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Entitlement Transitions Over Time",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT $__timeGroupAlias(created_at, '1m'), source AS metric, COUNT(*) AS value FROM entitlement_audit_log WHERE $__timeFilter(created_at) GROUP BY 1, source ORDER BY 1",
+        "format": "time_series",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Revocations Over Time (active → inactive)",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT $__timeGroupAlias(created_at, '1m'), source AS metric, COUNT(*) AS value FROM entitlement_audit_log WHERE $__timeFilter(created_at) AND prev_active = true AND next_active = false GROUP BY 1, source ORDER BY 1",
+        "format": "time_series",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 7,
+      "type": "piechart",
+      "title": "Active Users by Source",
+      "gridPos": {"x": 0, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT source, COUNT(DISTINCT user_id) AS value FROM source_entitlements WHERE active = true GROUP BY source ORDER BY value DESC",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "Transitions by Source",
+      "gridPos": {"x": 8, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT source, COUNT(*) AS value FROM entitlement_audit_log WHERE $__timeFilter(created_at) GROUP BY source ORDER BY value DESC",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 9,
+      "type": "piechart",
+      "title": "Transition Reasons",
+      "gridPos": {"x": 16, "y": 12, "w": 8, "h": 8},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT next_reason AS reason, COUNT(*) AS value FROM entitlement_audit_log WHERE $__timeFilter(created_at) GROUP BY next_reason ORDER BY value DESC LIMIT 10",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Recent Audit Log",
+      "gridPos": {"x": 0, "y": 20, "w": 24, "h": 10},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "options": {"sortBy": [{"displayName": "changedAt", "desc": true}]},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT created_at AS \"changedAt\", user_id AS \"userId\", source, COALESCE(event_id, '—') AS \"eventId\", prev_active AS \"prevActive\", COALESCE(prev_reason, '—') AS \"prevReason\", prev_expires_at AS \"prevExpiresAt\", next_active AS \"nextActive\", next_reason AS \"nextReason\", next_expires_at AS \"nextExpiresAt\" FROM entitlement_audit_log ORDER BY created_at DESC LIMIT 100",
+        "format": "table",
+        "refId": "A"
+      }]
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Current Entitlements (All Sources)",
+      "gridPos": {"x": 0, "y": 30, "w": 24, "h": 8},
+      "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+      "targets": [{
+        "datasource": {"type": "postgres", "uid": "postgres-reconciler"},
+        "rawSql": "SELECT user_id AS \"userId\", source, active, reason, expires_at AS \"expiresAt\", updated_at AS \"updatedAt\" FROM source_entitlements ORDER BY updated_at DESC LIMIT 100",
+        "format": "table",
+        "refId": "A"
+      }]
+    }
+  ]
+}

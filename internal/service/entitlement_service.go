@@ -38,27 +38,27 @@ func (s *EntitlementService) Get(ctx context.Context, userID string) (*models.En
 	return entitlement, nil
 }
 
-func (s *EntitlementService) IngestStoreWebhook(ctx context.Context, event models.StoreEvent) (bool, error) {
+func (s *EntitlementService) IngestStoreWebhook(ctx context.Context, event models.StoreEvent) (applied bool, duplicate bool, err error) {
 	tx, err := s.repo.DB.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	inserted, err := repository.InsertStoreEventTx(ctx, tx, event)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if !inserted {
-		return false, tx.Commit()
+		return false, true, tx.Commit()
 	}
 
 	lastEventTimeMs, err := repository.GetSourceLastEventTimeTx(ctx, tx, event.UserID, models.SourceStore)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if lastEventTimeMs > event.EventTimeMs {
-		return true, tx.Commit()
+		return false, false, tx.Commit()
 	}
 
 	active, expiresAt := storeTransition(event)
@@ -70,16 +70,16 @@ func (s *EntitlementService) IngestStoreWebhook(ctx context.Context, event model
 		ProductID:       event.ProductID,
 		ExpiresAt:       expiresAt,
 		LastEventTimeMs: event.EventTimeMs,
-	}); err != nil {
-		return false, err
+	}, event.EventID); err != nil {
+		return false, false, err
 	}
 	if active && expiresAt != nil {
 		if err := repository.ScheduleExpiringSoonTx(ctx, tx, event.UserID, models.SourceStore, *expiresAt); err != nil {
-			return false, err
+			return false, false, err
 		}
 	}
 
-	return true, tx.Commit()
+	return true, false, tx.Commit()
 }
 
 func (s *EntitlementService) RevokeMarketplace(ctx context.Context, userIDs []string) error {
@@ -100,7 +100,7 @@ func (s *EntitlementService) RevokeMarketplace(ctx context.Context, userIDs []st
 			Active:          false,
 			Reason:          "MARKETPLACE_BULK_REVOKE",
 			LastEventTimeMs: nowMs,
-		}); err != nil {
+		}, ""); err != nil {
 			return err
 		}
 	}
@@ -125,7 +125,7 @@ func (s *EntitlementService) ApplyCarrierStatus(ctx context.Context, userID stri
 			Active:          true,
 			Reason:          "CARRIER_ACTIVE",
 			LastEventTimeMs: nowMs,
-		}); err != nil {
+		}, ""); err != nil {
 			return err
 		}
 		if err := repository.ScheduleCarrierPollTx(ctx, tx, userID, now.Add(5*time.Minute), ""); err != nil {
@@ -138,7 +138,7 @@ func (s *EntitlementService) ApplyCarrierStatus(ctx context.Context, userID stri
 			Active:          false,
 			Reason:          "CARRIER_INACTIVE",
 			LastEventTimeMs: nowMs,
-		}); err != nil {
+		}, ""); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM carrier_poll_jobs WHERE user_id = $1`, userID); err != nil {

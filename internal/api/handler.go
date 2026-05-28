@@ -1,7 +1,10 @@
 package api
 
 import (
+	"context"
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -31,6 +34,20 @@ func NewHandler(entitlements *service.EntitlementService, repo *repository.Repos
 	}
 }
 
+// WarmSeenCache loads recently seen event IDs from the DB into the in-memory
+// cache. Call once after startup so the fast-path cache is useful immediately,
+// even after a restart.
+func (h *Handler) WarmSeenCache(ctx context.Context) error {
+	ids, err := h.repo.GetRecentEventIDs(ctx, 10000)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		h.seenEvents.add(id)
+	}
+	return nil
+}
+
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.Health)
@@ -40,6 +57,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /webhooks/store", h.StoreWebhook)
 	mux.HandleFunc("POST /webhooks/marketplace/revoke", h.MarketplaceRevoke)
 	mux.HandleFunc("GET /users/{id}/entitlement", h.GetEntitlement)
+	mux.HandleFunc("GET /users/{id}/timeline", h.GetTimeline)
 	mux.HandleFunc("GET /mock/carrier/plan", h.MockCarrierPlan)
 	return h.withMiddleware(mux)
 }
@@ -100,9 +118,16 @@ func (h *Handler) StoreWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	applied, err := h.entitlements.IngestStoreWebhook(r.Context(), event)
+	applied, duplicate, err := h.entitlements.IngestStoreWebhook(r.Context(), event)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if duplicate {
+		// DB caught it (cross-replica or post-eviction) — backfill cache so
+		// the next retry for this event_id is handled in memory.
+		h.seenEvents.add(event.EventID)
+		writeJSON(w, http.StatusOK, map[string]any{"status": "duplicate"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "applied": applied})
@@ -128,6 +153,59 @@ func (h *Handler) GetEntitlement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entitlement)
+}
+
+func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
+	userID := r.PathValue("id")
+	entries, err := h.repo.GetAuditLog(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if entries == nil {
+		entries = []models.AuditEntry{}
+	}
+
+	if r.URL.Query().Get("format") == "csv" {
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"timeline_%s.csv\"", userID))
+		cw := csv.NewWriter(w)
+		_ = cw.Write([]string{"id", "source", "eventId", "prevActive", "prevReason", "prevExpiresAt", "nextActive", "nextReason", "nextExpiresAt", "changedAt"})
+		for _, e := range entries {
+			eventID := ""
+			if e.EventID != nil {
+				eventID = *e.EventID
+			}
+			prevActive, prevReason, prevExpiresAt := "", "", ""
+			if e.Prev != nil {
+				prevActive = fmt.Sprintf("%t", e.Prev.Active)
+				prevReason = e.Prev.Reason
+				if e.Prev.ExpiresAt != nil {
+					prevExpiresAt = e.Prev.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z")
+				}
+			}
+			nextExpiresAt := ""
+			if e.Next.ExpiresAt != nil {
+				nextExpiresAt = e.Next.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z")
+			}
+			_ = cw.Write([]string{
+				fmt.Sprintf("%d", e.ID),
+				string(e.Source),
+				eventID,
+				prevActive,
+				prevReason,
+				prevExpiresAt,
+				fmt.Sprintf("%t", e.Next.Active),
+				e.Next.Reason,
+				nextExpiresAt,
+				e.ChangedAt.UTC().Format("2006-01-02T15:04:05Z"),
+			})
+		}
+		cw.Flush()
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"userId": userID, "timeline": entries})
 }
 
 func (h *Handler) MockCarrierPlan(w http.ResponseWriter, r *http.Request) {

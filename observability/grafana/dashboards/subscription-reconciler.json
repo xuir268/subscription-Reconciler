@@ -77,6 +77,24 @@
       "title": "Carrier Poll Results",
       "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
       "targets": [{"expr": "sum by (status) (rate(subscription_carrier_poll_total[1m]))"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Timeline Endpoint Request Rate",
+      "gridPos": {"x": 0, "y": 28, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (status) (rate(subscription_api_requests_total{path=\"/users/{id}/timeline\"}[1m]))", "legendFormat": "{{status}}"}]
+    },
+    {
+      "type": "stat",
+      "title": "Notifications Sent (total)",
+      "gridPos": {"x": 12, "y": 28, "w": 6, "h": 8},
+      "targets": [{"expr": "subscription_notifications_sent_total"}]
+    },
+    {
+      "type": "stat",
+      "title": "Carrier Last Batch Size",
+      "gridPos": {"x": 18, "y": 28, "w": 6, "h": 8},
+      "targets": [{"expr": "subscription_carrier_last_batch_size"}]
     }
   ]
 }

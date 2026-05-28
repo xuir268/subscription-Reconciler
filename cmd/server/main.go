@@ -38,6 +38,9 @@ func main() {
 	middleware := api.DefaultMiddlewareConfig()
 	middleware.RateLimit = envInt("API_RATE_LIMIT_PER_MINUTE", middleware.RateLimit)
 	handler := api.NewHandler(entitlements, repo, middleware, metricsRegistry)
+	if err := handler.WarmSeenCache(context.Background()); err != nil {
+		log.Printf("warn: could not warm seen-event cache: %v", err)
+	}
 	carrierPoller := worker.NewCarrierPoller(repo, entitlements, env("BASE_URL", "http://localhost"+addr), envInt("CARRIER_WORKER_POOL_SIZE", 8), metricsRegistry)
 	notificationSender := worker.NewNotificationSender(repo, metricsRegistry)
 

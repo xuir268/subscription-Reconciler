@@ -108,6 +108,23 @@ CREATE INDEX IF NOT EXISTS notifications_due_idx
 	ON notifications(scheduled_for)
 	WHERE sent_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS entitlement_audit_log (
+	id BIGSERIAL PRIMARY KEY,
+	user_id TEXT NOT NULL,
+	source TEXT NOT NULL,
+	event_id TEXT,
+	prev_active BOOLEAN,
+	prev_reason TEXT,
+	prev_expires_at TIMESTAMPTZ,
+	next_active BOOLEAN NOT NULL,
+	next_reason TEXT NOT NULL,
+	next_expires_at TIMESTAMPTZ,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS audit_log_user_created_idx
+	ON entitlement_audit_log(user_id, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS api_request_cache_expires_idx
 	ON api_request_cache(expires_at);
 `)

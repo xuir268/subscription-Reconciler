@@ -23,20 +23,26 @@ func TestDuplicateStoreWebhookIsIdempotent(t *testing.T) {
 		ProductID:   "premium_monthly",
 	}
 
-	applied, err := svc.IngestStoreWebhook(ctx, event)
+	applied, duplicate, err := svc.IngestStoreWebhook(ctx, event)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !applied {
 		t.Fatal("first event should be applied")
 	}
+	if duplicate {
+		t.Fatal("first event should not be a duplicate")
+	}
 
-	applied, err = svc.IngestStoreWebhook(ctx, event)
+	applied, duplicate, err = svc.IngestStoreWebhook(ctx, event)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if applied {
 		t.Fatal("duplicate event should not be applied")
+	}
+	if !duplicate {
+		t.Fatal("second event with same event_id must be flagged as duplicate by DB")
 	}
 
 	var count int
@@ -52,7 +58,7 @@ func TestOutOfOrderStoreWebhookDoesNotOverrideNewerEvent(t *testing.T) {
 	svc, _ := testService(t)
 	ctx := context.Background()
 
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_expiration",
 		UserID:      "u_order",
 		Type:        models.Expiration,
@@ -61,7 +67,7 @@ func TestOutOfOrderStoreWebhookDoesNotOverrideNewerEvent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_old_purchase",
 		UserID:      "u_order",
 		Type:        models.InitialPurchase,
@@ -84,7 +90,7 @@ func TestLateArrivingNewerStoreWebhookApplies(t *testing.T) {
 	svc, _ := testService(t)
 	ctx := context.Background()
 
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_purchase_first",
 		UserID:      "u_late",
 		Type:        models.InitialPurchase,
@@ -93,7 +99,7 @@ func TestLateArrivingNewerStoreWebhookApplies(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_expiration_late",
 		UserID:      "u_late",
 		Type:        models.Expiration,
@@ -127,7 +133,7 @@ func TestMarketplaceRevokeOnlyRevokesMarketplaceSource(t *testing.T) {
 		Reason:          "TEST",
 		ProductID:       "premium_monthly",
 		LastEventTimeMs: 1,
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.UpsertSourceEntitlementTx(ctx, tx, models.SourceEntitlement{
@@ -136,7 +142,7 @@ func TestMarketplaceRevokeOnlyRevokesMarketplaceSource(t *testing.T) {
 		Active:          true,
 		Reason:          "TEST",
 		LastEventTimeMs: 1,
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -171,7 +177,7 @@ func TestCarrierInactiveRevokesOnlyCarrierSource(t *testing.T) {
 		Reason:          "TEST",
 		ProductID:       "premium_monthly",
 		LastEventTimeMs: 1,
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.UpsertSourceEntitlementTx(ctx, tx, models.SourceEntitlement{
@@ -180,7 +186,7 @@ func TestCarrierInactiveRevokesOnlyCarrierSource(t *testing.T) {
 		Active:          true,
 		Reason:          "TEST",
 		LastEventTimeMs: 1,
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.ScheduleCarrierPollTx(ctx, tx, "u_carrier_inactive", time.Now().Add(-time.Minute), ""); err != nil {
@@ -225,7 +231,7 @@ func TestCarrierAPIErrorDoesNotRevoke(t *testing.T) {
 		Active:          true,
 		Reason:          "TEST",
 		LastEventTimeMs: 1,
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -279,7 +285,7 @@ func TestEntitlementReadReturnsCanonicalPublicShape(t *testing.T) {
 			LastEventTimeMs: 3,
 		},
 	} {
-		if err := repository.UpsertSourceEntitlementTx(ctx, tx, entitlement); err != nil {
+		if err := repository.UpsertSourceEntitlementTx(ctx, tx, entitlement, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -329,7 +335,7 @@ func TestExpiringSoonNotificationIsScheduledOnce(t *testing.T) {
 	eventTimeMs := time.Now().Add(-23 * time.Hour).UnixMilli()
 
 	for _, eventID := range []string{"evt_cancel_1", "evt_cancel_2"} {
-		if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+		if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 			EventID:     eventID,
 			UserID:      "u_notification",
 			Type:        models.Cancellation,
@@ -354,7 +360,7 @@ func TestNotificationNotScheduledWhenExpiryBeyond24h(t *testing.T) {
 	ctx := context.Background()
 
 	// event time is now → expiresAt = now+30d, well outside 24h window
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_notif_far",
 		UserID:      "u_notif_far",
 		Type:        models.InitialPurchase,
@@ -379,7 +385,7 @@ func TestNotificationNotScheduledWhenAlreadyExpired(t *testing.T) {
 
 	// event time is 2 days ago → expiresAt = yesterday, already past
 	eventTimeMs := time.Now().Add(-48 * time.Hour).UnixMilli()
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_notif_past",
 		UserID:      "u_notif_past",
 		Type:        models.Cancellation,
@@ -403,7 +409,7 @@ func TestNotificationRowShape(t *testing.T) {
 	ctx := context.Background()
 
 	eventTimeMs := time.Now().Add(-23 * time.Hour).UnixMilli()
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_notif_shape",
 		UserID:      "u_notif_shape",
 		Type:        models.Cancellation,
@@ -495,7 +501,7 @@ func TestNotificationNotScheduledForNonExpiringEvents(t *testing.T) {
 
 	// Expiration event → active=false, no expiresAt → no notification
 	eventTimeMs := time.Now().Add(-23 * time.Hour).UnixMilli()
-	if _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
+	if _, _, err := svc.IngestStoreWebhook(ctx, models.StoreEvent{
 		EventID:     "evt_notif_expiration",
 		UserID:      "u_notif_expiration",
 		Type:        models.Expiration,
@@ -579,7 +585,7 @@ func TestGetEntitlementStoreActive(t *testing.T) {
 		ProductID:       "premium_monthly",
 		ExpiresAt:       &expiry,
 		LastEventTimeMs: time.Now().UnixMilli(),
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -618,7 +624,7 @@ func TestGetEntitlementCarrierActive(t *testing.T) {
 		Active:          true,
 		Reason:          "CARRIER_ACTIVE",
 		LastEventTimeMs: time.Now().UnixMilli(),
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -651,7 +657,7 @@ func TestGetEntitlementMarketplaceActive(t *testing.T) {
 		Active:          true,
 		Reason:          "MARKETPLACE_GRANT",
 		LastEventTimeMs: time.Now().UnixMilli(),
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -685,7 +691,7 @@ func TestGetEntitlementSourcePriority(t *testing.T) {
 			Active:          true,
 			Reason:          "TEST",
 			LastEventTimeMs: time.Now().UnixMilli(),
-		}); err != nil {
+		}, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -719,7 +725,7 @@ func TestGetEntitlementInactiveSourceNotReturned(t *testing.T) {
 		Active:          false,
 		Reason:          "EXPIRATION",
 		LastEventTimeMs: time.Now().UnixMilli(),
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := repository.UpsertSourceEntitlementTx(ctx, tx, models.SourceEntitlement{
@@ -728,7 +734,7 @@ func TestGetEntitlementInactiveSourceNotReturned(t *testing.T) {
 		Active:          true,
 		Reason:          "CARRIER_ACTIVE",
 		LastEventTimeMs: time.Now().UnixMilli(),
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {

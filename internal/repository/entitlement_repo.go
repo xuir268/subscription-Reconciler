@@ -96,21 +96,38 @@ func GetSourceLastEventTimeTx(ctx context.Context, tx *sql.Tx, userID string, so
 	return lastEventTimeMs, nil
 }
 
-func UpsertSourceEntitlementTx(ctx context.Context, tx *sql.Tx, e models.SourceEntitlement) error {
+func UpsertSourceEntitlementTx(ctx context.Context, tx *sql.Tx, e models.SourceEntitlement, eventID string) error {
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO source_entitlements (
-			user_id, source, active, reason, product_id, expires_at, last_event_time_ms, updated_at
+		WITH prev AS (
+			SELECT active, reason, expires_at
+			FROM source_entitlements
+			WHERE user_id = $1 AND source = $2
+		),
+		upserted AS (
+			INSERT INTO source_entitlements (
+				user_id, source, active, reason, product_id, expires_at, last_event_time_ms, updated_at
+			)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, now())
+			ON CONFLICT (user_id, source)
+			DO UPDATE SET
+				active = EXCLUDED.active,
+				reason = EXCLUDED.reason,
+				product_id = EXCLUDED.product_id,
+				expires_at = EXCLUDED.expires_at,
+				last_event_time_ms = EXCLUDED.last_event_time_ms,
+				updated_at = now()
+			RETURNING active, reason, expires_at
 		)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, now())
-		ON CONFLICT (user_id, source)
-		DO UPDATE SET
-			active = EXCLUDED.active,
-			reason = EXCLUDED.reason,
-			product_id = EXCLUDED.product_id,
-			expires_at = EXCLUDED.expires_at,
-			last_event_time_ms = EXCLUDED.last_event_time_ms,
-			updated_at = now()
-	`, e.UserID, e.Source, e.Active, e.Reason, e.ProductID, e.ExpiresAt, e.LastEventTimeMs)
+		INSERT INTO entitlement_audit_log (
+			user_id, source, event_id,
+			prev_active, prev_reason, prev_expires_at,
+			next_active, next_reason, next_expires_at
+		)
+		SELECT $1, $2, NULLIF($8, ''),
+		       prev.active, prev.reason, prev.expires_at,
+		       upserted.active, upserted.reason, upserted.expires_at
+		FROM upserted LEFT JOIN prev ON true
+	`, e.UserID, e.Source, e.Active, e.Reason, e.ProductID, e.ExpiresAt, e.LastEventTimeMs, eventID)
 	return err
 }
 

@@ -2,6 +2,11 @@ package api
 
 import "sync"
 
+// seenCache is an in-memory LRU set used as a fast-path duplicate guard for
+// store webhook event IDs. It is NOT the authoritative deduplication layer —
+// the DB ON CONFLICT is. This cache avoids opening a DB transaction for events
+// that were recently seen. Pre-warm it from the DB on startup so it survives
+// restarts (see WarmSeenCache).
 type seenCache struct {
 	mu       sync.Mutex
 	capacity int
@@ -12,10 +17,11 @@ type seenCache struct {
 func newSeenCache(capacity int) *seenCache {
 	return &seenCache{
 		capacity: capacity,
-		items:    make(map[string]struct{}),
+		items:    make(map[string]struct{}, capacity),
 	}
 }
 
+// seenOrAdd returns true if key was already in the cache. Always adds the key.
 func (c *seenCache) seenOrAdd(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -31,4 +37,9 @@ func (c *seenCache) seenOrAdd(key string) bool {
 		delete(c.items, oldest)
 	}
 	return false
+}
+
+// add inserts a key without checking if it already exists.
+func (c *seenCache) add(key string) {
+	c.seenOrAdd(key)
 }
